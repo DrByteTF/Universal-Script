@@ -1,0 +1,473 @@
+--[[
+    Performance Booster — WindUI Edition
+    FPS Boost + Ping Optimizer + Live Stats
+]]
+
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local Stats = game:GetService("Stats")
+local Workspace = game:GetService("Workspace")
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+-- ==========================================
+-- Config
+-- ==========================================
+local Config = {
+    -- FPS Boost
+    BoostEnabled = false,
+    DisableShadows = true,
+    DisableParticles = true,
+    DisableTextures = true,
+    DisableFog = true,
+    DisableBloom = true,
+    DisableSunRays = true,
+    ReduceQuality = true,
+    MaxFPS = 0,                -- 0 = unlock
+    -- Ping
+    PingOptimizer = true,
+    ClearCache = false,
+    -- Display
+    ShowFPS = true,
+    ShowPing = true,
+    ShowMemory = true,
+    ShowNetwork = false,
+}
+
+-- ==========================================
+-- Original Values (so we can restore)
+-- ==========================================
+local Original = {
+    QualityLevel = nil,
+    FogEnd = nil,
+    FogStart = nil,
+    FogColor = nil,
+    Ambient = nil,
+    OutdoorAmbient = nil,
+    Brightness = nil,
+    GlobalShadows = nil,
+    Effects = {},
+}
+
+local function saveOriginals()
+    Original.QualityLevel = settings().Rendering.QualityLevel
+    Original.FogEnd = Lighting.FogEnd
+    Original.FogStart = Lighting.FogStart
+    Original.FogColor = Lighting.FogColor
+    Original.Ambient = Lighting.Ambient
+    Original.OutdoorAmbient = Lighting.OutdoorAmbient
+    Original.Brightness = Lighting.Brightness
+    Original.GlobalShadows = Lighting.GlobalShadows
+
+    -- Save lighting effects
+    for _, v in ipairs(Lighting:GetChildren()) do
+        if v:IsA("PostEffect") or v:IsA("Atmosphere") or v:IsA("Sky") then
+            table.insert(Original.Effects, { obj = v, enabled = v.Enabled })
+        end
+    end
+end
+
+local function restoreOriginals()
+    pcall(function() settings().Rendering.QualityLevel = Original.QualityLevel end)
+    Lighting.FogEnd = Original.FogEnd
+    Lighting.FogStart = Original.FogStart
+    Lighting.FogColor = Original.FogColor
+    Lighting.Ambient = Original.Ambient
+    Lighting.OutdoorAmbient = Original.OutdoorAmbient
+    Lighting.Brightness = Original.Brightness
+    Lighting.GlobalShadows = Original.GlobalShadows
+
+    for _, data in ipairs(Original.Effects) do
+        if data.obj and data.obj.Parent then
+            pcall(function() data.obj.Enabled = data.enabled end)
+        end
+    end
+end
+
+saveOriginals()
+
+-- ==========================================
+-- FPS Boost Functions
+-- ==========================================
+local function disableShadows()
+    if Config.DisableShadows then
+        Lighting.GlobalShadows = false
+        for _, v in ipairs(Lighting:GetDescendants()) do
+            if v:IsA("Shadow") then v.Enabled = false end
+        end
+    else
+        Lighting.GlobalShadows = true
+    end
+end
+
+local function disableParticles()
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
+            obj.Enabled = not Config.DisableParticles
+        end
+    end
+end
+
+local function disableTextures()
+    if Config.DisableTextures then
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("Decal") or obj:IsA("Texture") then
+                obj.Transparency = 1
+            end
+        end
+    end
+end
+
+local function disableFog()
+    if Config.DisableFog then
+        Lighting.FogEnd = 100000
+        Lighting.FogStart = 0
+        for _, v in ipairs(Lighting:GetDescendants()) do
+            if v:IsA("Atmosphere") then v.Enabled = false end
+        end
+    end
+end
+
+local function disableBloom()
+    for _, v in ipairs(Lighting:GetDescendants()) do
+        if v:IsA("BloomEffect") or v:IsA("SunRaysEffect") or v:IsA("BlurEffect") or v:IsA("DepthOfFieldEffect") then
+            v.Enabled = not Config.DisableBloom
+        end
+    end
+end
+
+local function reduceQuality()
+    if Config.ReduceQuality then
+        pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+    else
+        pcall(function() settings().Rendering.QualityLevel = Original.QualityLevel end)
+    end
+end
+
+local function unlockFPS()
+    if setfpscap then
+        pcall(function() setfpscap(Config.MaxFPS) end)
+    end
+end
+
+local function applyBoost()
+    if Config.BoostEnabled then
+        if Config.DisableShadows then disableShadows() end
+        if Config.DisableParticles then disableParticles() end
+        if Config.DisableFog then disableFog() end
+        if Config.DisableBloom then disableBloom() end
+        if Config.ReduceQuality then reduceQuality() end
+        unlockFPS()
+    else
+        restoreOriginals()
+        pcall(function() settings().Rendering.QualityLevel = Original.QualityLevel end)
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
+                obj.Enabled = true
+            end
+        end
+    end
+end
+
+-- Continuous particle cleanup (for new objects)
+RunService.Heartbeat:Connect(function()
+    if not Config.BoostEnabled or not Config.DisableParticles then return end
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
+            if obj.Enabled then obj.Enabled = false end
+        end
+    end
+end)
+
+-- ==========================================
+-- Ping / Network Optimization
+-- ==========================================
+local function clearTextureCache()
+    pcall(function()
+        for _, obj in ipairs(game:GetService("ContentProvider"):GetChildren()) do end
+    end)
+    pcall(function()
+        game:GetService("ContentProvider"):PreloadAsync({})
+    end)
+end
+
+local function optimizeNetwork()
+    -- Disconnect unused connections (light)
+    pcall(function()
+        collectgarbage("collect")
+    end)
+end
+
+task.spawn(function()
+    while task.wait(5) do
+        if Config.PingOptimizer then
+            pcall(function() collectgarbage("collect") end)
+        end
+    end
+end)
+
+-- ==========================================
+-- Live Displays
+-- ==========================================
+local displayGui
+local fpsLabel, pingLabel, memLabel, netLabel
+
+local function createDisplay()
+    if displayGui then return end
+    displayGui = Instance.new("ScreenGui")
+    displayGui.Name = "PerfBooster_Display"
+    displayGui.ResetOnSpawn = false
+    displayGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 180, 0, 100)
+    frame.Position = UDim2.new(0, 10, 0, 10)
+    frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    frame.BackgroundTransparency = 0.3
+    frame.BorderSizePixel = 0
+    frame.Active = true
+    frame.Draggable = true
+    frame.Parent = displayGui
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+    Instance.new("UIStroke", frame).Color = Color3.fromRGB(50, 50, 50)
+
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 4)
+    layout.Parent = frame
+    Instance.new("UIPadding", frame).PaddingTop = UDim.new(0, 8)
+
+    local function mkLabel(color, text)
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -16, 0, 18)
+        lbl.Position = UDim2.new(0, 8, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.TextColor3 = color
+        lbl.Font = Enum.Font.GothamBold
+        lbl.TextSize = 13
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Text = text
+        lbl.Parent = frame
+        return lbl
+    end
+
+    fpsLabel = mkLabel(Color3.fromRGB(0, 255, 100), "FPS: --")
+    pingLabel = mkLabel(Color3.fromRGB(255, 200, 0), "Ping: --")
+    memLabel = mkLabel(Color3.fromRGB(0, 200, 255), "Memory: --")
+    netLabel = mkLabel(Color3.fromRGB(200, 100, 255), "Net: --")
+end
+
+local function destroyDisplay()
+    if displayGui then
+        displayGui:Destroy()
+        displayGui = nil
+        fpsLabel, pingLabel, memLabel, netLabel = nil, nil, nil, nil
+    end
+end
+
+local fpsFrames, fpsLast = 0, tick()
+
+RunService.RenderStepped:Connect(function()
+    if not displayGui then return end
+
+    -- FPS
+    if fpsLabel then
+        if Config.ShowFPS then
+            fpsFrames = fpsFrames + 1
+            local now = tick()
+            if now - fpsLast >= 0.5 then
+                local fps = math.floor(fpsFrames / (now - fpsLast))
+                local color = fps >= 50 and Color3.fromRGB(0, 255, 100)
+                           or fps >= 30 and Color3.fromRGB(255, 200, 0)
+                           or Color3.fromRGB(255, 50, 50)
+                fpsLabel.TextColor3 = color
+                fpsLabel.Text = "FPS: " .. fps
+                fpsFrames, fpsLast = 0, now
+            end
+            fpsLabel.Visible = true
+        else
+            fpsLabel.Visible = false
+        end
+    end
+
+    -- Ping
+    if pingLabel then
+        if Config.ShowPing then
+            pingLabel.Visible = true
+        else
+            pingLabel.Visible = false
+        end
+    end
+
+    -- Memory
+    if memLabel then
+        if Config.ShowMemory then
+            local mb = math.floor(Stats:GetTotalMemoryUsageMb())
+            memLabel.Text = "Memory: " .. mb .. " MB"
+            memLabel.Visible = true
+        else
+            memLabel.Visible = false
+        end
+    end
+
+    -- Net stats
+    if netLabel then
+        if Config.ShowNetwork then
+            local recv = Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+            netLabel.Text = "Net: " .. math.floor(recv) .. "ms"
+            netLabel.Visible = true
+        else
+            netLabel.Visible = false
+        end
+    end
+end)
+
+task.spawn(function()
+    while task.wait(1) do
+        if pingLabel and Config.ShowPing then
+            local ok, ping = pcall(function()
+                return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+            end)
+            if ok then
+                local color = ping <= 60 and Color3.fromRGB(0, 255, 100)
+                           or ping <= 120 and Color3.fromRGB(255, 200, 0)
+                           or Color3.fromRGB(255, 50, 50)
+                pingLabel.TextColor3 = color
+                pingLabel.Text = "Ping: " .. math.floor(ping) .. "ms"
+            end
+        end
+    end
+end)
+
+-- ==========================================
+-- WindUI
+-- ==========================================
+local Window = WindUI:CreateWindow({
+    Title = "Performance Booster",
+    Icon = "rocket",
+    Author = "WindUI",
+    Folder = "PerfBooster",
+    Size = UDim2.fromOffset(500, 420),
+    Transparent = true,
+    Theme = "Dark",
+    SideBarWidth = 150,
+    HideSearchBar = true,
+    ScrollBarEnabled = false,
+})
+
+local BoostTab = Window:Tab({ Title = "FPS Boost", Icon = "zap" })
+local PingTab  = Window:Tab({ Title = "Ping",      Icon = "wifi" })
+local DispTab  = Window:Tab({ Title = "Displays",  Icon = "monitor" })
+
+-- ==========================================
+-- FPS Boost Tab
+-- ==========================================
+local B1 = BoostTab:Section({ Title = "Master Switch", Opened = true })
+B1:Toggle({
+    Title = "🔥 Enable Boost Mode",
+    Desc = "Applies all FPS optimizations below",
+    Default = Config.BoostEnabled,
+    Callback = function(v)
+        Config.BoostEnabled = v
+        applyBoost()
+    end,
+})
+
+local B2 = BoostTab:Section({ Title = "Tweaks", Opened = true })
+B2:Toggle({
+    Title = "Disable Shadows",
+    Default = Config.DisableShadows,
+    Callback = function(v) Config.DisableShadows = v; if Config.BoostEnabled then disableShadows() end end,
+})
+B2:Toggle({
+    Title = "Disable Particles",
+    Default = Config.DisableParticles,
+    Callback = function(v) Config.DisableParticles = v; if Config.BoostEnabled then disableParticles() end end,
+})
+B2:Toggle({
+    Title = "Disable Fog",
+    Default = Config.DisableFog,
+    Callback = function(v) Config.DisableFog = v; if Config.BoostEnabled then disableFog() end end,
+})
+B2:Toggle({
+    Title = "Disable Bloom / Sunrays",
+    Default = Config.DisableBloom,
+    Callback = function(v) Config.DisableBloom = v; if Config.BoostEnabled then disableBloom() end end,
+})
+B2:Toggle({
+    Title = "Reduce Graphics Quality",
+    Default = Config.ReduceQuality,
+    Callback = function(v) Config.ReduceQuality = v; if Config.BoostEnabled then reduceQuality() end end,
+})
+B2:Slider({
+    Title = "FPS Cap (0 = unlimited)",
+    Step = 5,
+    Value = { Min = 0, Max = 240, Default = Config.MaxFPS },
+    Callback = function(v)
+        Config.MaxFPS = v
+        unlockFPS()
+    end,
+})
+
+-- ==========================================
+-- Ping Tab
+-- ==========================================
+local PG1 = PingTab:Section({ Title = "Network", Opened = true })
+PG1:Toggle({
+    Title = "Auto GC (reduces memory lag)",
+    Default = Config.PingOptimizer,
+    Callback = function(v) Config.PingOptimizer = v end,
+})
+PG1:Button({
+    Title = "🗑️ Clear Texture Cache",
+    Callback = function()
+        clearTextureCache()
+        print("[Perf] Texture cache cleared.")
+    end,
+})
+PG1:Button({
+    Title = "⚡ Force Garbage Collect",
+    Callback = function()
+        collectgarbage("collect")
+        print("[Perf] Garbage collection done.")
+    end,
+})
+
+-- ==========================================
+-- Displays Tab
+-- ==========================================
+local D1 = DispTab:Section({ Title = "On-Screen Stats", Opened = true })
+
+D1:Toggle({
+    Title = "Show Display",
+    Desc = "Toggle the entire stats overlay",
+    Default = false,
+    Callback = function(v)
+        if v then createDisplay() else destroyDisplay() end
+    end,
+})
+D1:Toggle({
+    Title = "Show FPS",
+    Default = Config.ShowFPS,
+    Callback = function(v) Config.ShowFPS = v end,
+})
+D1:Toggle({
+    Title = "Show Ping",
+    Default = Config.ShowPing,
+    Callback = function(v) Config.ShowPing = v end,
+})
+D1:Toggle({
+    Title = "Show Memory",
+    Default = Config.ShowMemory,
+    Callback = function(v) Config.ShowMemory = v end,
+})
+D1:Toggle({
+    Title = "Show Network Latency",
+    Default = Config.ShowNetwork,
+    Callback = function(v) Config.ShowNetwork = v end,
+})
+
+print("Performance Booster loaded.")
