@@ -1,0 +1,424 @@
+--[[
+    All-in-One Performance GUI (Boost + Disabler combined)
+    FPS Monitor + FPS Boost (with Effects Disabler built-in) + FullBright.
+    WARNING: Use at your own risk.
+]]
+
+-- ==========================================
+-- Services
+-- ==========================================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+-- ==========================================
+-- Config
+-- ==========================================
+local Config = {
+    FPSBoost = false,
+    FullBright = false,
+    ShowFPS = true,
+}
+
+-- ==========================================
+-- Save originals (restore targets)
+-- ==========================================
+local Original = {
+    Ambient = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    Brightness = Lighting.Brightness,
+    GlobalShadows = Lighting.GlobalShadows,
+    FogEnd = Lighting.FogEnd,
+    FogStart = Lighting.FogStart,
+    FogColor = Lighting.FogColor,
+    ExposureCompensation = Lighting.ExposureCompensation,
+    QualityLevel = nil,
+}
+pcall(function() Original.QualityLevel = settings().Rendering.QualityLevel end)
+
+-- Storage for disabler restore
+local Stored = {
+    parts = {},
+    particles = {},
+    effects = {},
+    textures = {},
+    sky = nil,
+}
+
+-- ==========================================
+-- FPS BOOST (includes Effects Disabler)
+-- ==========================================
+local boostHeartbeat = nil
+local boostTimer = 0
+
+local function applyFPSBoost()
+    -- === Graphics Downgrade ===
+    pcall(function()
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+    end)
+
+    Lighting.GlobalShadows = false
+    Lighting.FogStart = 100000
+    Lighting.FogEnd = 100000
+    Lighting.Ambient = Color3.fromRGB(100, 100, 100)
+    Lighting.OutdoorAmbient = Color3.fromRGB(100, 100, 100)
+    Lighting.Brightness = 1
+    Lighting.ExposureCompensation = -0.2
+
+    for _, v in ipairs(Lighting:GetDescendants()) do
+        if v:IsA("BloomEffect") or v:IsA("BlurEffect")
+        or v:IsA("SunRaysEffect") or v:IsA("DepthOfFieldEffect")
+        or v:IsA("Atmosphere") then
+            v.Enabled = false
+        end
+    end
+
+    if setfpscap then
+        pcall(function() setfpscap(240) end)
+    end
+
+    -- === Effects Disabler (stripping visuals) ===
+    Stored.parts = {}
+    Stored.particles = {}
+    Stored.effects = {}
+    Stored.textures = {}
+
+    for _, v in ipairs(game:GetDescendants()) do
+        pcall(function()
+            if v:IsA("BasePart") or v:IsA("UnionOperation") then
+                Stored.parts[v] = v.Material
+                v.Material = Enum.Material.SmoothPlastic
+            end
+
+            if v:IsA("ParticleEmitter") or v:IsA("Smoke")
+            or v:IsA("Sparkles") or v:IsA("Fire") or v:IsA("Explosion") then
+                Stored.particles[v] = v.Enabled
+                v.Enabled = false
+            end
+
+            if v:IsA("BloomEffect") or v:IsA("BlurEffect")
+            or v:IsA("DepthOfFieldEffect") or v:IsA("SunRaysEffect") then
+                Stored.effects[v] = v.Enabled
+                v.Enabled = false
+            end
+
+            if v:IsA("Decal") or v:IsA("Texture") then
+                Stored.textures[v] = v.Texture
+                v.Texture = ""
+            end
+        end)
+    end
+
+    local sky = Lighting:FindFirstChildOfClass("Sky")
+    if sky then
+        Stored.sky = { obj = sky, parent = sky.Parent }
+        sky.Parent = nil
+    end
+
+    -- === Continuous cleanup loop ===
+    if boostHeartbeat then boostHeartbeat:Disconnect() end
+    boostTimer = 0
+    boostHeartbeat = RunService.Heartbeat:Connect(function(dt)
+        if not Config.FPSBoost then return end
+        boostTimer = boostTimer + dt
+        if boostTimer < 2 then return end
+        boostTimer = 0
+
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if (obj:IsA("ParticleEmitter") or obj:IsA("Trail")
+            or obj:IsA("Smoke") or obj:IsA("Fire")
+            or obj:IsA("Sparkles") or obj:IsA("Beam"))
+            and obj.Enabled then
+                obj.Enabled = false
+            end
+        end
+        for _, v in ipairs(Lighting:GetDescendants()) do
+            if (v:IsA("BloomEffect") or v:IsA("BlurEffect")
+            or v:IsA("DepthOfFieldEffect") or v:IsA("SunRaysEffect"))
+            and v.Enabled then
+                v.Enabled = false
+            end
+        end
+    end)
+
+    pcall(function() collectgarbage("collect") end)
+    print("[Boost] Applied (with Effects Disabler).")
+end
+
+local function restoreFPSBoost()
+    -- === Restore graphics quality ===
+    pcall(function()
+        if Original.QualityLevel then
+            settings().Rendering.QualityLevel = Original.QualityLevel
+        else
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
+        end
+    end)
+
+    Lighting.Ambient = Original.Ambient
+    Lighting.OutdoorAmbient = Original.OutdoorAmbient
+    Lighting.Brightness = Original.Brightness
+    Lighting.GlobalShadows = Original.GlobalShadows
+    Lighting.FogEnd = Original.FogEnd
+    Lighting.FogStart = Original.FogStart
+    Lighting.ExposureCompensation = Original.ExposureCompensation
+
+    for _, v in ipairs(Lighting:GetDescendants()) do
+        if v:IsA("BloomEffect") or v:IsA("BlurEffect")
+        or v:IsA("SunRaysEffect") or v:IsA("DepthOfFieldEffect")
+        or v:IsA("Atmosphere") then
+            v.Enabled = true
+        end
+    end
+
+    -- === Restore disabler changes ===
+    for part, mat in pairs(Stored.parts) do
+        if part and part.Parent then
+            pcall(function() part.Material = mat end)
+        end
+    end
+    for emitter, was in pairs(Stored.particles) do
+        if emitter and emitter.Parent then
+            pcall(function() emitter.Enabled = was end)
+        end
+    end
+    for effect, was in pairs(Stored.effects) do
+        if effect and effect.Parent then
+            pcall(function() effect.Enabled = was end)
+        end
+    end
+    for tex, original in pairs(Stored.textures) do
+        if tex and tex.Parent then
+            pcall(function() tex.Texture = original end)
+        end
+    end
+    if Stored.sky and Stored.sky.obj and Stored.sky.parent then
+        pcall(function() Stored.sky.obj.Parent = Stored.sky.parent end)
+    end
+
+    if boostHeartbeat then boostHeartbeat:Disconnect(); boostHeartbeat = nil end
+    if setfpscap then pcall(function() setfpscap(60) end) end
+
+    print("[Boost] Removed.")
+end
+
+-- ==========================================
+-- FullBright — Apply / Restore
+-- ==========================================
+local FullBrightOriginal = nil
+
+local function applyFullBright()
+    FullBrightOriginal = {
+        FogColor = Lighting.FogColor,
+        FogEnd = Lighting.FogEnd,
+        FogStart = Lighting.FogStart,
+        Ambient = Lighting.Ambient,
+        Brightness = Lighting.Brightness,
+        OutdoorAmbient = Lighting.OutdoorAmbient,
+    }
+
+    Lighting.FogColor = Color3.fromRGB(255, 255, 255)
+    Lighting.FogEnd = math.huge
+    Lighting.FogStart = math.huge
+    Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+    Lighting.Brightness = 5
+    Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+
+    print("[FullBright] On.")
+end
+
+local function restoreFullBright()
+    if not FullBrightOriginal then return end
+    for k, v in pairs(FullBrightOriginal) do
+        pcall(function() Lighting[k] = v end)
+    end
+    FullBrightOriginal = nil
+    print("[FullBright] Off.")
+end
+
+-- ==========================================
+-- GUI
+-- ==========================================
+local parent = gethui and gethui() or LocalPlayer:WaitForChild("PlayerGui")
+
+local old = parent:FindFirstChild("AllInOnePerfGUI")
+if old then old:Destroy() end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AllInOnePerfGUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.DisplayOrder = 9999
+ScreenGui.Parent = parent
+
+-- Main Frame
+local Frame = Instance.new("Frame")
+Frame.Name = "Container"
+Frame.Size = UDim2.new(0, 250, 0, 220)
+Frame.Position = UDim2.new(0, 20, 0, 20)
+Frame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+Frame.BackgroundTransparency = 0.15
+Frame.BorderSizePixel = 0
+Frame.Active = true
+Frame.Draggable = true
+Frame.Parent = ScreenGui
+
+Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 10)
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(60, 60, 80)
+stroke.Thickness = 1.5
+stroke.Parent = Frame
+
+local grad = Instance.new("UIGradient")
+grad.Rotation = 45
+grad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 20, 30)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(35, 35, 50)),
+})
+grad.Parent = Frame
+
+-- Title
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -20, 0, 26)
+Title.Position = UDim2.new(0, 10, 0, 6)
+Title.BackgroundTransparency = 1
+Title.Text = "⚡ All-in-One Perf"
+Title.TextColor3 = Color3.fromRGB(220, 220, 255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 14
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Frame
+
+-- FPS
+local FPSLabel = Instance.new("TextLabel")
+FPSLabel.Name = "FPSLabel"
+FPSLabel.Size = UDim2.new(1, -20, 0, 40)
+FPSLabel.Position = UDim2.new(0, 10, 0, 34)
+FPSLabel.BackgroundTransparency = 1
+FPSLabel.Text = "FPS: --"
+FPSLabel.TextColor3 = Color3.fromRGB(0, 255, 130)
+FPSLabel.Font = Enum.Font.GothamBold
+FPSLabel.TextSize = 28
+FPSLabel.TextXAlignment = Enum.TextXAlignment.Left
+FPSLabel.Parent = Frame
+
+-- Helper: create a button
+local function makeButton(name, text, yPos, callback)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Size = UDim2.new(1, -20, 0, 40)
+    btn.Position = UDim2.new(0, 10, 0, yPos)
+    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+    btn.BorderSizePixel = 0
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(220, 220, 255)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 13
+    btn.AutoButtonColor = false
+    btn.Parent = Frame
+
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+
+    local bStroke = Instance.new("UIStroke")
+    bStroke.Color = Color3.fromRGB(80, 80, 120)
+    bStroke.Thickness = 1.5
+    bStroke.Parent = btn
+
+    btn.MouseButton1Click:Connect(function()
+        callback()
+
+        btn.Size = UDim2.new(1, -20, 0, 36)
+        task.wait(0.08)
+        btn.Size = UDim2.new(1, -20, 0, 40)
+    end)
+
+    return btn, bStroke
+end
+
+-- FPS Boost Button (now with Disabler built-in)
+local BoostBtn, BoostStroke = makeButton("BoostBtn", "⚡ FPS BOOST: OFF", 82, function()
+    Config.FPSBoost = not Config.FPSBoost
+    if Config.FPSBoost then applyFPSBoost() else restoreFPSBoost() end
+
+    if Config.FPSBoost then
+        BoostBtn.Text = "⚡ FPS BOOST: ON"
+        BoostBtn.BackgroundColor3 = Color3.fromRGB(40, 150, 80)
+        BoostStroke.Color = Color3.fromRGB(80, 255, 130)
+    else
+        BoostBtn.Text = "⚡ FPS BOOST: OFF"
+        BoostBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+        BoostStroke.Color = Color3.fromRGB(80, 80, 120)
+    end
+end)
+
+-- FullBright Button
+local BrightBtn, BrightStroke = makeButton("BrightBtn", "💡 FULLBRIGHT: OFF", 130, function()
+    Config.FullBright = not Config.FullBright
+    if Config.FullBright then applyFullBright() else restoreFullBright() end
+
+    if Config.FullBright then
+        BrightBtn.Text = "💡 FULLBRIGHT: ON"
+        BrightBtn.BackgroundColor3 = Color3.fromRGB(180, 150, 30)
+        BrightStroke.Color = Color3.fromRGB(255, 230, 100)
+    else
+        BrightBtn.Text = "💡 FULLBRIGHT: OFF"
+        BrightBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+        BrightStroke.Color = Color3.fromRGB(80, 80, 120)
+    end
+end)
+
+-- Status Text
+local Status = Instance.new("TextLabel")
+Status.Size = UDim2.new(1, -20, 0, 20)
+Status.Position = UDim2.new(0, 10, 1, -26)
+Status.BackgroundTransparency = 1
+Status.Text = "RightShift to hide"
+Status.TextColor3 = Color3.fromRGB(150, 150, 180)
+Status.Font = Enum.Font.Gotham
+Status.TextSize = 11
+Status.TextXAlignment = Enum.TextXAlignment.Center
+Status.Parent = Frame
+
+-- ==========================================
+-- FPS Counter Loop
+-- ==========================================
+local frameCount = 0
+local lastUpdate = tick()
+
+RunService.RenderStepped:Connect(function()
+    frameCount = frameCount + 1
+    local now = tick()
+    if now - lastUpdate >= 0.5 then
+        local fps = math.floor(frameCount / (now - lastUpdate))
+        frameCount = 0
+        lastUpdate = now
+
+        FPSLabel.Text = "FPS: " .. fps
+        if fps >= 50 then
+            FPSLabel.TextColor3 = Color3.fromRGB(0, 255, 130)
+        elseif fps >= 30 then
+            FPSLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+        else
+            FPSLabel.TextColor3 = Color3.fromRGB(255, 70, 70)
+        end
+    end
+end)
+
+-- ==========================================
+-- RightShift toggle
+-- ==========================================
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Enum.KeyCode.RightShift then
+        Frame.Visible = not Frame.Visible
+    end
+end)
+
+print("[AllInOnePerfGUI] Loaded. Press RightShift to toggle.")
